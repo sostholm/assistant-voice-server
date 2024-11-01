@@ -1,0 +1,6 @@
+pyaudio 
+webrtcvad 
+websockets
+httpx
+elevenlabs
+numpy==2.1.2
