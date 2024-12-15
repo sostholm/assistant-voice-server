@@ -9,7 +9,9 @@ import webrtcvad
 import tempfile
 import wave
 from elevenlabs import VoiceSettings, AsyncElevenLabs, Voice
-from typing import AsyncIterator
+from database import get_users_voice_recognition
+from typing import AsyncIterator, List
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -39,6 +41,8 @@ VOICED_THRESHOLD = 0.8  # Threshold for speech detection
 PRE_ROLL_DURATION_MS = 200  # Pre-roll buffering
 pre_roll_frames = int(PRE_ROLL_DURATION_MS / CHUNK_DURATION_MS)
 
+AUTHORIZED_USERS: List[str] = [u.nick_name for u in get_users_voice_recognition()]
+
 async def connect_to_websocket(uri):
     while True:
         try:
@@ -67,6 +71,16 @@ async def generate_tts_stream(text: str) -> AsyncIterator[bytes]:
         output_format="mp3_44100_128",
     )
     return stream
+
+def filter_authorized_users(text: str) -> str:
+    split = text.split('\n')
+    filtered_text = ""
+    # Check the line starts with <nickname>:
+    for i, line in enumerate(split):
+        if line.startswith(tuple(AUTHORIZED_USERS)):
+            filtered_text += line + '\n'
+    
+    return filtered_text
 
 async def handle_client(websocket, path):
     logger.info(f"Client connected: {websocket.remote_address}")
@@ -143,8 +157,11 @@ async def handle_client(websocket, path):
                         os.remove(audio_file_path)  # Clean up temporary file
 
                         if transcription.strip() != "":
+                            # Filter out unauthorized users
+                            filtered = filter_authorized_users(transcription)
+
                             # Send transcription to AI agent
-                            await ai_agent_socket.send(transcription)
+                            await ai_agent_socket.send(filtered)
                         else:
                             logger.info("Transcription is empty, not sending to AI agent")
 

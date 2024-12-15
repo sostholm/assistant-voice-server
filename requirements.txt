@@ -3,4 +3,7 @@ webrtcvad
 websockets
 httpx
 elevenlabs
-numpy==2.1.2
+pyannote.audio==2.1.1
+psycopg==3.1.18
+psycopg-binary==3.1.18
+python-ulid==2.5.0
