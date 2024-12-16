@@ -82,7 +82,7 @@ def filter_authorized_users(text: str) -> str:
     
     return filtered_text
 
-async def handle_client(websocket, path):
+async def handle_client(websocket):
     logger.info(f"Client connected: {websocket.remote_address}")
     ring_buffer = collections.deque(maxlen=pre_roll_frames)
     triggered = False
