@@ -9,7 +9,7 @@ import webrtcvad
 import tempfile
 import wave
 from elevenlabs import VoiceSettings, AsyncElevenLabs, Voice
-from database import get_users_voice_recognition
+from .database import get_users_voice_recognition
 from typing import AsyncIterator, List
 import re
 
