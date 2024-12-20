@@ -159,7 +159,7 @@ async def handle_client(websocket):
                         # Filter out unauthorized users
                         filtered = filter_authorized_users(transcription)
                         if transcription.strip() != "":
-                            logger.infio(f"Filtered transcription: {filtered}")
+                            logger.info(f"Filtered transcription: {filtered}")
                             # Send transcription to AI agent
                             await ai_agent_socket.send(filtered)
                         else:
