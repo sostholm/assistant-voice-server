@@ -156,10 +156,10 @@ async def handle_client(websocket):
 
                         os.remove(audio_file_path)  # Clean up temporary file
 
+                        # Filter out unauthorized users
+                        filtered = filter_authorized_users(transcription)
                         if transcription.strip() != "":
-                            # Filter out unauthorized users
-                            filtered = filter_authorized_users(transcription)
-
+                            
                             # Send transcription to AI agent
                             await ai_agent_socket.send(filtered)
                         else:
