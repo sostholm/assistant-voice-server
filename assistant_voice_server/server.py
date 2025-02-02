@@ -9,9 +9,10 @@ import webrtcvad
 import tempfile
 import wave
 from elevenlabs import VoiceSettings, AsyncElevenLabs, Voice
-from .database import get_users_voice_recognition
+from .database import get_users_voice_recognition, get_device_by_id, Device
 from typing import AsyncIterator, List
-import re
+import json
+from dataclasses import dataclass, asdict
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -72,18 +73,40 @@ async def generate_tts_stream(text: str) -> AsyncIterator[bytes]:
     )
     return stream
 
-def filter_authorized_users(text: str) -> str:
-    split = text.split('\n')
-    filtered_text = ""
+@dataclass
+class AiAgentMessage:
+    nickname: str
+    message: str
+    location: str
+
+def filter_authorized_users(transcriptions: List[dict], device: Device) -> List[AiAgentMessage]:
+    filtered_text = []
     # Check the line starts with <nickname>:
-    for i, line in enumerate(split):
-        if line.startswith(tuple(AUTHORIZED_USERS)):
-            filtered_text += line + '\n'
+    for key, value in transcriptions.items():
+        if key in AUTHORIZED_USERS:
+            filtered_text.append(AiAgentMessage(nickname=key, message=value, location=device.location))
     
     return filtered_text
 
 async def handle_client(websocket):
     logger.info(f"Client connected: {websocket.remote_address}")
+
+    try:
+        device_id_msg = await websocket.recv()
+        device_id = int(device_id_msg)
+
+        device: Device = await get_device_by_id(device_id)
+        assert device is not None, f"Device with ID {device_id} not found"
+        
+        logger.info(f"Received device ID from client: {device_id}")
+    except ValueError:
+        logger.error("Failed to parse device ID from client. Closing connection.")
+        await websocket.close()
+        return
+    except websockets.ConnectionClosed:
+        logger.info("Connection closed before receiving device ID.")
+        return
+
     ring_buffer = collections.deque(maxlen=pre_roll_frames)
     triggered = False
     voiced_frames = []
@@ -94,6 +117,9 @@ async def handle_client(websocket):
 
     stt_socket = await connect_to_websocket(stt_uri)
     ai_agent_socket = await connect_to_websocket(ai_agent_uri)
+
+    # Send device information to AI Agent
+    await ai_agent_socket.send(json.dumps(device._asdict()))
 
     async def listen_to_ai_agent():
         try:
@@ -152,15 +178,17 @@ async def handle_client(websocket):
                         with open(audio_file_path, "rb") as f:
                             await stt_socket.send(f.read())
                         transcription = await stt_socket.recv()
+                        transcription = json.loads(transcription)
                         logger.info(f"Received transcription: {transcription}")
 
                         os.remove(audio_file_path)  # Clean up temporary file
 
                         # Filter out unauthorized users
-                        filtered = filter_authorized_users(transcription)
-                        if filtered.strip() != "":
+                        filtered: List[AiAgentMessage] = filter_authorized_users(transcription)
+                        if len(filtered) != 0:
+                            json_data = json.dumps([asdict(message) for message in filtered])
                             # Send transcription to AI agent
-                            await ai_agent_socket.send(filtered)
+                            await ai_agent_socket.send(json_data)
                         else:
                             logger.info("Transcription is empty, not sending to AI agent")
 
