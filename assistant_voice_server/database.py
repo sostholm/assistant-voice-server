@@ -36,18 +36,16 @@ def get_users_voice_recognition() -> List[UserVoiceRecognition]:
     cursor.execute("""
         SELECT 
             u.user_id,
-            up.full_name AS name,
+            COALESCE(up.full_name, 'Unknown') AS name,
             up.nick_name,
             array_agg(vr.voice_recognition) AS voice_data
         FROM users u
-        JOIN user_profile up ON u.user_profile_id = up.user_profile_id
+        LEFT JOIN user_profile up ON u.user_profile_id = up.user_profile_id
         LEFT JOIN voice_recognition vr ON u.user_id = vr.user_id
         GROUP BY u.user_id, up.full_name, up.nick_name;
     """)
     rows = cursor.fetchall()
 
-    # Each row: (user_id, name, nick_name, voice_data)
-    # voice_data may be None if there are no recordings.
     results = []
     for row in rows:
         user_id, name, nick_name, voice_data = row
@@ -59,7 +57,6 @@ def get_users_voice_recognition() -> List[UserVoiceRecognition]:
             nick_name=nick_name,
             voice_recognition=voice_data
         ))
-
     return results
 
 @dataclass
@@ -72,8 +69,8 @@ class Device:
     mac_address: str
     location: str
     status: str
-    created_at: datetime
-    updated_at: datetime
+    registered_at: datetime
+    last_seen_at: datetime
 
 async def get_device_by_id(
     conn: psycopg.AsyncConnection,
@@ -83,7 +80,7 @@ async def get_device_by_id(
         async with conn.cursor() as cur:
             await cur.execute(
                 """
-                SELECT id, device_name, device_type_id, unique_identifier, ip_address, mac_address, location, status, created_at, updated_at
+                SELECT id, device_name, device_type_id, unique_identifier, ip_address, mac_address, location, status, registered_at, last_seen_at
                 FROM devices
                 WHERE id = %s
                 """,
