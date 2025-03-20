@@ -28,28 +28,24 @@ conn = psycopg.connect(
 class UserVoiceRecognition:
     user_id: str
     nick_name: Optional[str]
-    voice_recognition: List[bytes]
 
 def get_users_voice_recognition() -> List[UserVoiceRecognition]:
     cursor = conn.cursor()
     cursor.execute("""
         SELECT
             u.user_id,
-            u.nick_name AS nick_name,
-            vr.voice_recognition AS voice_data
+            u.nick_name
         FROM users u
-        LEFT JOIN voice_recognition vr ON u.user_id = vr.user_id;
     """)
     rows = cursor.fetchall()
 
     cursor.execute("""
         SELECT
             ai.ai_id,
-            ai.ai_name,
-            vr.voice_recognition AS voice_data
+            ai.ai_name
         FROM ai 
-        LEFT JOIN voice_recognition vr ON ai.ai_id = vr.ai_id;""")
-    
+    """)
+
     rows += cursor.fetchall()
     cursor.close()
 
