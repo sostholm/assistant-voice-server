@@ -193,7 +193,7 @@ async def handle_client(websocket):
                                 continue
 
                             # Filter out unauthorized users
-                            filtered: List[AiAgentMessage] = filter_authorized_users(transcription)
+                            filtered: List[AiAgentMessage] = filter_authorized_users(transcription, device=device)
                             if len(filtered) != 0:
                                 json_data = json.dumps([asdict(message) for message in filtered])
                                 # Send transcription to AI agent
