@@ -14,8 +14,6 @@ import psycopg
 from typing import AsyncIterator, List
 import json
 from dataclasses import dataclass, asdict
-import platform
-from asyncio import WindowsSelectorEventLoopPolicy
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
