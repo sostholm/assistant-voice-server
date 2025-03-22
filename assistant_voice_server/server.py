@@ -9,10 +9,13 @@ import webrtcvad
 import tempfile
 import wave
 from elevenlabs import VoiceSettings, AsyncElevenLabs, Voice
-from .database import get_users_voice_recognition, get_device_by_id, Device
+from .database import get_users_voice_recognition, get_device_by_id, Device, DSN
+import psycopg
 from typing import AsyncIterator, List
 import json
 from dataclasses import dataclass, asdict
+import platform
+from asyncio import WindowsSelectorEventLoopPolicy
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -95,7 +98,8 @@ async def handle_client(websocket):
         device_id_msg = await websocket.recv()
         device_id = int(device_id_msg)
 
-        device: Device = await get_device_by_id(device_id)
+        async with await psycopg.AsyncConnection.connect(DSN) as conn:
+            device: Device = await get_device_by_id(conn, device_id)
         assert device is not None, f"Device with ID {device_id} not found"
         
         logger.info(f"Received device ID from client: {device_id}")
@@ -214,4 +218,5 @@ async def main():
     await server.wait_closed()
 
 if __name__ == "__main__":
+
     asyncio.run(main())

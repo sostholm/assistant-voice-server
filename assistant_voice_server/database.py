@@ -7,7 +7,7 @@ from datetime import datetime
 POSTGRES_USER = os.getenv("POSTGRES_USER")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
 DATABASE_ADDRESS = os.getenv("DATABASE_ADDRESS", "192.168.0.218")
-DATABASE_NAME = os.getenv("DATABASE_NAME", "assistant_v2")
+DATABASE_NAME = os.getenv("DATABASE_NAME", "assistant_testing")
 DATABASE_PORT = os.getenv("DATABASE_PORT", "5432")
 
 DSN = (
@@ -25,11 +25,11 @@ conn = psycopg.connect(
 
 
 @dataclass
-class UserVoiceRecognition:
+class User:
     user_id: str
     nick_name: Optional[str]
 
-def get_users_voice_recognition() -> List[UserVoiceRecognition]:
+def get_users_voice_recognition() -> List[User]:
     cursor = conn.cursor()
     cursor.execute("""
         SELECT
@@ -51,13 +51,10 @@ def get_users_voice_recognition() -> List[UserVoiceRecognition]:
 
     results = []
     for row in rows:
-        user_id, nick_name, voice_data = row
-        if voice_data is None:
-            continue
-        results.append(UserVoiceRecognition(
+        user_id, nick_name = row
+        results.append(User(
             user_id=user_id,
             nick_name=nick_name,
-            voice_recognition=voice_data
         ))
     return results
 
