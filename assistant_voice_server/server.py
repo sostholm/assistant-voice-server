@@ -175,24 +175,36 @@ async def handle_client(websocket):
                                 wf.writeframes(audio_data)
                             audio_file_path = temp_audio_file.name
 
-                        # Send audio file over WebSocket to STT service
-                        logger.info("Sending audio data to STT service")
-                        with open(audio_file_path, "rb") as f:
-                            await stt_socket.send(f.read())
-                        transcription = await stt_socket.recv()
-                        transcription = json.loads(transcription)
-                        logger.info(f"Received transcription: {transcription}")
+                        try:
+                            # Send audio file over WebSocket to STT service
+                            logger.info("Sending audio data to STT service")
+                            with open(audio_file_path, "rb") as f:
+                                await stt_socket.send(f.read())
+                            transcription = await stt_socket.recv()
+                            transcription = json.loads(transcription)
+                            logger.info(f"Received transcription: {transcription}")
 
-                        os.remove(audio_file_path)  # Clean up temporary file
+                            if not transcription:
+                                logger.warning("No speech detected in audio. Skipping processing.")
+                                # Reset variables for next detection
+                                voiced_frames.clear()
+                                ring_buffer.clear()
+                                triggered = False
+                                continue
 
-                        # Filter out unauthorized users
-                        filtered: List[AiAgentMessage] = filter_authorized_users(transcription)
-                        if len(filtered) != 0:
-                            json_data = json.dumps([asdict(message) for message in filtered])
-                            # Send transcription to AI agent
-                            await ai_agent_socket.send(json_data)
-                        else:
-                            logger.info("Transcription is empty, not sending to AI agent")
+                            # Filter out unauthorized users
+                            filtered: List[AiAgentMessage] = filter_authorized_users(transcription)
+                            if len(filtered) != 0:
+                                json_data = json.dumps([asdict(message) for message in filtered])
+                                # Send transcription to AI agent
+                                await ai_agent_socket.send(json_data)
+                            else:
+                                logger.info("Transcription is empty, not sending to AI agent")
+                        finally:
+                            # Ensure the temporary file is removed
+                            if os.path.exists(audio_file_path):
+                                os.remove(audio_file_path)
+                                logger.info(f"Temporary file {audio_file_path} removed")
 
                         # Reset variables for next detection
                         voiced_frames.clear()
