@@ -73,11 +73,6 @@ class Device:
     registered_at: datetime
     last_seen_at: datetime
 
-    def __post_init__(self):
-        # Convert UUID fields to strings if necessary
-        if isinstance(self.unique_identifier, UUID):
-            self.unique_identifier = str(self.unique_identifier)
-
 async def get_device_by_id(
     conn: psycopg.AsyncConnection,
     device_id: int
