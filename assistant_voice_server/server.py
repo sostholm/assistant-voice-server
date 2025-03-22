@@ -121,7 +121,7 @@ async def handle_client(websocket):
     ai_agent_socket = await connect_to_websocket(ai_agent_uri)
 
     # Send device information to AI Agent
-    await ai_agent_socket.send(json.dumps(device._asdict()))
+    await ai_agent_socket.send(json.dumps(asdict(device)))
 
     async def listen_to_ai_agent():
         try:
