@@ -1,3 +1,4 @@
+from uuid import UUID
 import psycopg
 import os
 from dataclasses import dataclass
@@ -64,13 +65,18 @@ class Device:
     id: int
     device_name: str
     device_type_id: int
-    unique_identifier: str
+    unique_identifier: str  # Assuming this is a UUID field
     ip_address: str
     mac_address: str
     location: str
     status: str
     registered_at: datetime
     last_seen_at: datetime
+
+    def __post_init__(self):
+        # Convert UUID fields to strings if necessary
+        if isinstance(self.unique_identifier, UUID):
+            self.unique_identifier = str(self.unique_identifier)
 
 async def get_device_by_id(
     conn: psycopg.AsyncConnection,
