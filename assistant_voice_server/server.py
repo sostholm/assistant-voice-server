@@ -83,9 +83,10 @@ class AiAgentMessage:
 def filter_authorized_users(transcriptions: List[dict], device: Device) -> List[AiAgentMessage]:
     filtered_text = []
     # Check the line starts with <nickname>:
-    for key, value in transcriptions.items():
-        if key in AUTHORIZED_USERS:
-            filtered_text.append(AiAgentMessage(nickname=key, message=value, location=device.location))
+    for item in transcriptions:
+        for key, value in item.items():
+            if key in AUTHORIZED_USERS:
+                filtered_text.append(AiAgentMessage(nickname=key, message=value, location=device.location))
     
     return filtered_text
 
