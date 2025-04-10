@@ -45,6 +45,9 @@ pre_roll_frames = int(PRE_ROLL_DURATION_MS / CHUNK_DURATION_MS)
 
 AUTHORIZED_USERS: List[str] = [u.nick_name for u in get_users_voice_recognition() if u.human]
 
+# Add a dictionary to store user recognition thresholds
+USER_THRESHOLDS = {u.nick_name: u.threshold for u in get_users_voice_recognition()}
+
 async def connect_to_websocket(uri):
     while True:
         try:
@@ -85,8 +88,21 @@ def filter_authorized_users(transcriptions: List[dict], device: Device) -> List[
     # Check the line starts with <nickname>:
     for item in transcriptions:
         for key, value in item.items():
-            if key in AUTHORIZED_USERS:
-                filtered_text.append(AiAgentMessage(nickname=key, message=value, location=device.location))
+            # Check if this is a dict with confidence info or just a string
+            if isinstance(value, dict) and "text" in value and "confidence" in value:
+                confidence = value["confidence"]
+                text = value["text"]
+                threshold = USER_THRESHOLDS.get(key, VOICED_THRESHOLD)  # Default to VOICED_THRESHOLD if no specific threshold
+                
+                logger.info(f"Voice recognition for {key}: confidence={confidence}, threshold={threshold}")
+                
+                # Only add human users (those in AUTHORIZED_USERS) that pass the threshold check
+                if key in AUTHORIZED_USERS and confidence >= threshold:
+                    filtered_text.append(AiAgentMessage(nickname=key, message=text, location=device.location))
+                    logger.info(f"Authorized human user {key} passed threshold check with confidence {confidence}")
+            elif key in AUTHORIZED_USERS:
+                # Don't add entries without confidence scores to filtered_text
+                logger.info(f"Skipping user {key} - no confidence score available to verify against threshold")
     
     return filtered_text
 
