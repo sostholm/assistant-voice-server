@@ -43,7 +43,7 @@ VOICED_THRESHOLD = 0.8  # Threshold for speech detection
 PRE_ROLL_DURATION_MS = 200  # Pre-roll buffering
 pre_roll_frames = int(PRE_ROLL_DURATION_MS / CHUNK_DURATION_MS)
 
-AUTHORIZED_USERS: List[str] = [u.nick_name for u in get_users_voice_recognition()]
+AUTHORIZED_USERS: List[str] = [u.nick_name for u in get_users_voice_recognition() if u.human]
 
 async def connect_to_websocket(uri):
     while True:

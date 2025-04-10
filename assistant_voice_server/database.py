@@ -29,6 +29,7 @@ conn = psycopg.connect(
 class User:
     user_id: str
     nick_name: Optional[str]
+    human: bool = True
 
 def get_users_voice_recognition() -> List[User]:
     cursor = conn.cursor()
@@ -40,6 +41,14 @@ def get_users_voice_recognition() -> List[User]:
     """)
     rows = cursor.fetchall()
 
+    results = []
+    for row in rows:
+        user_id, nick_name = row
+        results.append(User(
+            user_id=user_id,
+            nick_name=nick_name,
+        ))
+
     cursor.execute("""
         SELECT
             ai.ai_id,
@@ -47,15 +56,16 @@ def get_users_voice_recognition() -> List[User]:
         FROM ai 
     """)
 
-    rows += cursor.fetchall()
+    ai_rows = cursor.fetchall()
     cursor.close()
 
     results = []
-    for row in rows:
+    for row in ai_rows:
         user_id, nick_name = row
         results.append(User(
             user_id=user_id,
             nick_name=nick_name,
+            human=False,
         ))
     return results
 
