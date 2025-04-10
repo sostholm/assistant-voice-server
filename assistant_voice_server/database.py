@@ -59,7 +59,6 @@ def get_users_voice_recognition() -> List[User]:
     ai_rows = cursor.fetchall()
     cursor.close()
 
-    results = []
     for row in ai_rows:
         user_id, nick_name = row
         results.append(User(
