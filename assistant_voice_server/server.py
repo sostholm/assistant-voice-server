@@ -87,7 +87,6 @@ def filter_authorized_users(transcriptions: List[dict], device: Device) -> List[
         for key, value in item.items():
             if key in AUTHORIZED_USERS:
                 filtered_text.append(AiAgentMessage(nickname=key, message=value, location=device.location))
-                logger.info(f"Authorized human user {key} recognized (no confidence score available)")
     
     return filtered_text
 
