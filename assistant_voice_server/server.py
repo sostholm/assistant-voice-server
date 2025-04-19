@@ -129,12 +129,20 @@ async def handle_client(websocket):
             async for message in ai_agent_socket:
                 logger.info(f"Received response from AI Agent: {message}")
                 # Generate and stream TTS audio back to the client
-                tts_stream = await generate_tts_stream(message)
-                logger.info("Streaming TTS audio to client")
-                async for chunk in tts_stream:
-                    if chunk:
-                        await websocket.send(chunk)
-                logger.info("Completed streaming TTS audio to client")
+                try:
+                    tts_stream = await generate_tts_stream(message)
+                    logger.info("Streaming TTS audio to client")
+                    async for chunk in tts_stream:
+                        if chunk:
+                            await websocket.send(chunk)
+                    logger.info("Completed streaming TTS audio to client")
+                except websockets.ConnectionClosed:
+                    logger.warning("Client connection closed during TTS streaming.")
+                    break # Exit loop if client disconnects
+                except Exception as e:
+                    logger.error(f"Error during TTS generation or streaming: {e}")
+                    # Decide if we should break or continue based on the error
+                    # For now, we log and continue listening for the next AI message
         except websockets.ConnectionClosed:
             logger.warning("Connection to AI Agent closed.")
         except Exception as e:
@@ -224,8 +232,15 @@ async def handle_client(websocket):
         ai_listener_task.cancel()
 
 async def main():
-    server = await websockets.serve(handle_client, '0.0.0.0', 9001)
-    logger.info("Server started on port 9001")
+    # Add ping_interval and ping_timeout to keep connections alive
+    server = await websockets.serve(
+        handle_client,
+        '0.0.0.0',
+        9001,
+        ping_interval=20,  # Send a ping every 20 seconds
+        ping_timeout=20   # Close connection if pong not received within 20 seconds
+    )
+    logger.info("Server started on port 9001 with keepalive pings enabled")
     await server.wait_closed()
 
 if __name__ == "__main__":
