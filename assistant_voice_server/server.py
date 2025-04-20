@@ -74,6 +74,21 @@ async def generate_tts_stream(text: str) -> AsyncIterator[bytes]:
     )
     return stream
 
+async def stream_tts_to_client(websocket, text: str):
+    """Generates TTS audio and streams it to the client."""
+    try:
+        logger.info(f"Generating TTS for: {text[:50]}...") # Log beginning of TTS generation
+        tts_stream = await generate_tts_stream(text)
+        logger.info("Streaming TTS audio to client")
+        async for chunk in tts_stream:
+            if chunk:
+                await websocket.send(chunk)
+        logger.info("Completed streaming TTS audio to client")
+    except websockets.ConnectionClosed:
+        logger.warning("Client connection closed during TTS streaming.")
+    except Exception as e:
+        logger.error(f"Error during TTS generation or streaming: {e}")
+
 @dataclass
 class AiAgentMessage:
     nickname: str
@@ -128,21 +143,9 @@ async def handle_client(websocket):
         try:
             async for message in ai_agent_socket:
                 logger.info(f"Received response from AI Agent: {message}")
-                # Generate and stream TTS audio back to the client
-                try:
-                    tts_stream = await generate_tts_stream(message)
-                    logger.info("Streaming TTS audio to client")
-                    async for chunk in tts_stream:
-                        if chunk:
-                            await websocket.send(chunk)
-                    logger.info("Completed streaming TTS audio to client")
-                except websockets.ConnectionClosed:
-                    logger.warning("Client connection closed during TTS streaming.")
-                    break # Exit loop if client disconnects
-                except Exception as e:
-                    logger.error(f"Error during TTS generation or streaming: {e}")
-                    # Decide if we should break or continue based on the error
-                    # For now, we log and continue listening for the next AI message
+                # Generate and stream TTS audio back to the client in a separate task
+                # to avoid blocking the listener loop.
+                asyncio.create_task(stream_tts_to_client(websocket, message))
         except websockets.ConnectionClosed:
             logger.warning("Connection to AI Agent closed.")
         except Exception as e:
