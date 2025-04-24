@@ -83,6 +83,7 @@ async def stream_tts_to_client(websocket, text: str):
         async for chunk in tts_stream:
             if chunk:
                 await websocket.send(chunk)
+                await asyncio.sleep(0) # Yield control to allow other tasks (like keepalive) to run
         logger.info("Completed streaming TTS audio to client")
     except websockets.ConnectionClosed:
         logger.warning("Client connection closed during TTS streaming.")
