@@ -38,10 +38,11 @@ CHANNELS = 1
 MIC_RATE = 16000  # Should match the client's MIC_RATE
 CHUNK_DURATION_MS = 20  # Must match the client's CHUNK_DURATION_MS
 CHUNK_SIZE = int(MIC_RATE * CHUNK_DURATION_MS / 1000) * 2  # 2 bytes per sample
-SILENCE_THRESHOLD = 0.5  # seconds of silence to consider as end of speech
-VOICED_THRESHOLD = 0.8  # Threshold for speech detection
+VOICED_THRESHOLD = 0.8  # Threshold for speech/silence detection within the ring buffer
 PRE_ROLL_DURATION_MS = 200  # Pre-roll buffering
 pre_roll_frames = int(PRE_ROLL_DURATION_MS / CHUNK_DURATION_MS)
+MAX_SEGMENT_DURATION_S = 5  # Max duration before sending segment to STT
+MAX_SEGMENT_FRAMES = int(MAX_SEGMENT_DURATION_S * 1000 / CHUNK_DURATION_MS)
 
 AUTHORIZED_USERS: List[str] = [u.nick_name for u in get_users_voice_recognition() if u.human]
 
@@ -129,6 +130,7 @@ async def handle_client(websocket):
     ring_buffer = collections.deque(maxlen=pre_roll_frames)
     triggered = False
     voiced_frames = []
+    current_transcription_batch: List[AiAgentMessage] = []
 
     # WebSocket connections to STT and AI agent
     stt_uri = STT_SERVER_URI
@@ -159,7 +161,11 @@ async def handle_client(websocket):
             message = await websocket.recv()
             if isinstance(message, bytes):
                 chunk = message
-                is_speech = vad.is_speech(chunk, MIC_RATE)
+                try:
+                    is_speech = vad.is_speech(chunk, MIC_RATE)
+                except webrtcvad.VadError as e:
+                    logger.warning(f"VAD error processing chunk: {e}. Skipping chunk.")
+                    continue
 
                 if not triggered:
                     ring_buffer.append((chunk, is_speech))
@@ -170,65 +176,116 @@ async def handle_client(websocket):
                         # Include pre-roll frames
                         voiced_frames.extend([f for f, s in ring_buffer])
                         ring_buffer.clear()
+                        current_transcription_batch = []
                 else:
                     voiced_frames.append(chunk)
                     ring_buffer.append((chunk, is_speech))
+
                     num_unvoiced = len([f for f, speech in ring_buffer if not speech])
-                    if num_unvoiced > VOICED_THRESHOLD * ring_buffer.maxlen:
-                        logger.info("Silence detected, stop recording")
-                        # Process the collected audio
-                        audio_data = b''.join(voiced_frames)
+                    silence_detected = num_unvoiced > VOICED_THRESHOLD * ring_buffer.maxlen
+                    max_duration_reached = len(voiced_frames) >= MAX_SEGMENT_FRAMES
 
-                        # Save audio data to a WAV file
-                        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio_file:
-                            with wave.open(temp_audio_file, "wb") as wf:
-                                wf.setnchannels(CHANNELS)
-                                wf.setsampwidth(2)  # 16-bit PCM
-                                wf.setframerate(MIC_RATE)
-                                wf.writeframes(audio_data)
-                            audio_file_path = temp_audio_file.name
+                    if silence_detected or max_duration_reached:
+                        process_reason = "Silence" if silence_detected else "Max duration"
+                        logger.info(f"{process_reason} detected, processing audio segment.")
 
-                        try:
-                            # Send audio file over WebSocket to STT service
-                            logger.info("Sending audio data to STT service")
-                            with open(audio_file_path, "rb") as f:
-                                await stt_socket.send(f.read())
-                            transcription = await stt_socket.recv()
-                            transcription = json.loads(transcription)
-                            logger.info(f"Received transcription: {transcription}")
+                        frames_to_process = voiced_frames[:]
+                        voiced_frames.clear()
 
-                            if not transcription:
-                                logger.warning("No speech detected in audio. Skipping processing.")
-                                # Reset variables for next detection
-                                voiced_frames.clear()
+                        if not frames_to_process:
+                            logger.warning("Skipping processing of empty audio segment.")
+                            if silence_detected:
+                                logger.info("Resetting VAD state due to silence (empty segment).")
                                 ring_buffer.clear()
                                 triggered = False
-                                continue
+                                current_transcription_batch = []
+                            continue
 
-                            # Filter out unauthorized users
-                            filtered: List[AiAgentMessage] = filter_authorized_users(transcription, device=device)
-                            if len(filtered) != 0:
-                                json_data = json.dumps([asdict(message) for message in filtered])
-                                # Send transcription to AI agent
+                        audio_data = b''.join(frames_to_process)
+                        audio_file_path = None
+
+                        try:
+                            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio_file:
+                                with wave.open(temp_audio_file, "wb") as wf:
+                                    wf.setnchannels(CHANNELS)
+                                    wf.setsampwidth(2)  # 16-bit PCM
+                                    wf.setframerate(MIC_RATE)
+                                    wf.writeframes(audio_data)
+                                audio_file_path = temp_audio_file.name
+
+                            logger.info(f"Sending {len(audio_data)} bytes of audio data to STT service ({process_reason} trigger)")
+                            with open(audio_file_path, "rb") as f:
+                                await stt_socket.send(f.read())
+                            transcription_json = await stt_socket.recv()
+                            transcription = json.loads(transcription_json)
+                            logger.info(f"Received transcription: {transcription}")
+
+                            filtered_messages: List[AiAgentMessage] = filter_authorized_users(transcription, device=device)
+                            authorized_user_in_segment = len(filtered_messages) > 0
+                            logger.info(f"Authorized user in segment: {authorized_user_in_segment}")
+
+                            current_transcription_batch.extend(filtered_messages)
+                            batch_contains_authorized = any(msg.nickname in AUTHORIZED_USERS for msg in current_transcription_batch)
+
+                            send_batch_to_ai = False
+                            reset_vad_state = False
+
+                            if silence_detected:
+                                if batch_contains_authorized:
+                                    logger.info("Silence detected and batch contains authorized user. Sending batch to AI.")
+                                    send_batch_to_ai = True
+                                else:
+                                    logger.info("Silence detected but batch has no authorized user. Discarding batch.")
+                                reset_vad_state = True
+                            elif max_duration_reached:
+                                if not authorized_user_in_segment:
+                                    if batch_contains_authorized:
+                                        logger.info("Max duration reached, last segment had no authorized user. Sending accumulated batch to AI.")
+                                        send_batch_to_ai = True
+                                    else:
+                                        logger.info("Max duration reached, no authorized user in last segment or batch. Discarding batch.")
+                                    reset_vad_state = True
+                                else:
+                                    logger.info("Max duration reached with authorized user. Continuing batch.")
+                                    send_batch_to_ai = False
+                                    reset_vad_state = False
+
+                            if send_batch_to_ai and current_transcription_batch:
+                                json_data = json.dumps([asdict(message) for message in current_transcription_batch])
+                                logger.info(f"Sending batch to AI agent: {json_data}")
                                 await ai_agent_socket.send(json_data)
-                            else:
-                                logger.info("Transcription is empty, not sending to AI agent")
-                        finally:
-                            # Ensure the temporary file is removed
-                            if os.path.exists(audio_file_path):
-                                os.remove(audio_file_path)
-                                logger.info(f"Temporary file {audio_file_path} removed")
 
-                        # Reset variables for next detection
-                        voiced_frames.clear()
-                        ring_buffer.clear()
-                        triggered = False
+                            if reset_vad_state:
+                                logger.info("Resetting VAD state.")
+                                ring_buffer.clear()
+                                triggered = False
+                                current_transcription_batch = []
+
+                        except websockets.ConnectionClosed as e:
+                            logger.warning(f"Connection to STT or AI Agent closed during processing: {e}")
+                            if silence_detected:
+                                logger.info("Resetting VAD state due to silence after connection error.")
+                                ring_buffer.clear()
+                                triggered = False
+                                current_transcription_batch = []
+                            continue
+                        except Exception as e:
+                            logger.error(f"Error during STT/AI processing: {e}", exc_info=True)
+                            if silence_detected:
+                                logger.info("Resetting VAD state due to silence after processing error.")
+                                ring_buffer.clear()
+                                triggered = False
+                                current_transcription_batch = []
+                        finally:
+                            if audio_file_path and os.path.exists(audio_file_path):
+                                os.remove(audio_file_path)
+
             else:
                 logger.warning("Received non-bytes message from client")
     except websockets.ConnectionClosed:
         logger.info(f"Connection closed: {websocket.remote_address}")
     except Exception as e:
-        logger.error(f"Error handling client {websocket.remote_address}: {e}")
+        logger.error(f"Error handling client {websocket.remote_address}: {e}", exc_info=True)
     finally:
         logger.info(f"Client disconnected: {websocket.remote_address}")
         await stt_socket.close()
