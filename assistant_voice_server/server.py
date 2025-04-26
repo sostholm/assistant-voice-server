@@ -38,9 +38,18 @@ CHANNELS = 1
 MIC_RATE = 16000  # Should match the client's MIC_RATE
 CHUNK_DURATION_MS = 20  # Must match the client's CHUNK_DURATION_MS
 CHUNK_SIZE = int(MIC_RATE * CHUNK_DURATION_MS / 1000) * 2  # 2 bytes per sample
-VOICED_THRESHOLD = 0.8  # Threshold for speech/silence detection within the ring buffer
-PRE_ROLL_DURATION_MS = 200  # Pre-roll buffering
-pre_roll_frames = int(PRE_ROLL_DURATION_MS / CHUNK_DURATION_MS)
+
+# --- Triggering Configuration ---
+SPEECH_TRIGGER_DURATION_MS = 200  # Pre-roll buffering / initial speech detection window
+SPEECH_TRIGGER_FRAMES = int(SPEECH_TRIGGER_DURATION_MS / CHUNK_DURATION_MS)
+SPEECH_TRIGGER_THRESHOLD = 0.8  # Min ratio of voiced frames in trigger window to start recording
+
+# --- Silence Detection Configuration ---
+SILENCE_DETECT_DURATION_MS = 700  # Duration of silence needed to end recording
+SILENCE_DETECT_FRAMES = int(SILENCE_DETECT_DURATION_MS / CHUNK_DURATION_MS)
+SILENCE_DETECT_THRESHOLD = 0.9  # Min ratio of non-voiced frames in silence window to stop recording
+
+# --- Segment Configuration ---
 MAX_SEGMENT_DURATION_S = 5  # Max duration before sending segment to STT
 MAX_SEGMENT_FRAMES = int(MAX_SEGMENT_DURATION_S * 1000 / CHUNK_DURATION_MS)
 
@@ -127,7 +136,10 @@ async def handle_client(websocket):
         logger.info("Connection closed before receiving device ID.")
         return
 
-    ring_buffer = collections.deque(maxlen=pre_roll_frames)
+    # Separate buffers for triggering and silence detection
+    trigger_buffer = collections.deque(maxlen=SPEECH_TRIGGER_FRAMES)
+    silence_buffer = collections.deque(maxlen=SILENCE_DETECT_FRAMES)
+    
     triggered = False
     voiced_frames = []
     current_transcription_batch: List[AiAgentMessage] = []
@@ -168,21 +180,31 @@ async def handle_client(websocket):
                     continue
 
                 if not triggered:
-                    ring_buffer.append((chunk, is_speech))
-                    num_voiced = len([f for f, speech in ring_buffer if speech])
-                    if num_voiced > VOICED_THRESHOLD * ring_buffer.maxlen:
-                        triggered = True
-                        logger.info("Speech detected, start recording")
-                        # Include pre-roll frames
-                        voiced_frames.extend([f for f, s in ring_buffer])
-                        ring_buffer.clear()
-                        current_transcription_batch = []
+                    trigger_buffer.append((chunk, is_speech))
+                    # Check if buffer is full enough to make a decision
+                    if len(trigger_buffer) == trigger_buffer.maxlen:
+                        num_voiced = len([f for f, speech in trigger_buffer if speech])
+                        if num_voiced > SPEECH_TRIGGER_THRESHOLD * trigger_buffer.maxlen:
+                            triggered = True
+                            logger.info("Speech detected, start recording")
+                            # Include pre-roll frames from trigger buffer
+                            voiced_frames.extend([f for f, s in trigger_buffer])
+                            trigger_buffer.clear() # Clear trigger buffer
+                            silence_buffer.clear() # Ensure silence buffer is clear
+                            current_transcription_batch = [] # Reset batch
                 else:
+                    # Append audio chunk to main list
                     voiced_frames.append(chunk)
-                    ring_buffer.append((chunk, is_speech))
+                    # Append speech status to silence detection buffer
+                    silence_buffer.append(is_speech)
 
-                    num_unvoiced = len([f for f, speech in ring_buffer if not speech])
-                    silence_detected = num_unvoiced > VOICED_THRESHOLD * ring_buffer.maxlen
+                    # Check silence only if silence buffer is full
+                    silence_detected = False
+                    if len(silence_buffer) == silence_buffer.maxlen:
+                        num_unvoiced = len([speech for speech in silence_buffer if not speech])
+                        if num_unvoiced > SILENCE_DETECT_THRESHOLD * silence_buffer.maxlen:
+                            silence_detected = True
+                    
                     max_duration_reached = len(voiced_frames) >= MAX_SEGMENT_FRAMES
 
                     if silence_detected or max_duration_reached:
@@ -196,7 +218,8 @@ async def handle_client(websocket):
                             logger.warning("Skipping processing of empty audio segment.")
                             if silence_detected:
                                 logger.info("Resetting VAD state due to silence (empty segment).")
-                                ring_buffer.clear()
+                                trigger_buffer.clear() # Clear both buffers on reset
+                                silence_buffer.clear()
                                 triggered = False
                                 current_transcription_batch = []
                             continue
@@ -236,7 +259,7 @@ async def handle_client(websocket):
                                     send_batch_to_ai = True
                                 else:
                                     logger.info("Silence detected but batch has no authorized user. Discarding batch.")
-                                reset_vad_state = True
+                                reset_vad_state = True # Always reset on silence
                             elif max_duration_reached:
                                 if not authorized_user_in_segment:
                                     if batch_contains_authorized:
@@ -244,11 +267,11 @@ async def handle_client(websocket):
                                         send_batch_to_ai = True
                                     else:
                                         logger.info("Max duration reached, no authorized user in last segment or batch. Discarding batch.")
-                                    reset_vad_state = True
+                                    reset_vad_state = True # Reset if authorized speech stream broken
                                 else:
                                     logger.info("Max duration reached with authorized user. Continuing batch.")
                                     send_batch_to_ai = False
-                                    reset_vad_state = False
+                                    reset_vad_state = False # Continue listening
 
                             if send_batch_to_ai and current_transcription_batch:
                                 json_data = json.dumps([asdict(message) for message in current_transcription_batch])
@@ -257,23 +280,26 @@ async def handle_client(websocket):
 
                             if reset_vad_state:
                                 logger.info("Resetting VAD state.")
-                                ring_buffer.clear()
+                                trigger_buffer.clear() # Clear both buffers
+                                silence_buffer.clear()
                                 triggered = False
                                 current_transcription_batch = []
 
                         except websockets.ConnectionClosed as e:
                             logger.warning(f"Connection to STT or AI Agent closed during processing: {e}")
-                            if silence_detected:
+                            if silence_detected: # Check original trigger reason for reset
                                 logger.info("Resetting VAD state due to silence after connection error.")
-                                ring_buffer.clear()
+                                trigger_buffer.clear()
+                                silence_buffer.clear()
                                 triggered = False
                                 current_transcription_batch = []
                             continue
                         except Exception as e:
                             logger.error(f"Error during STT/AI processing: {e}", exc_info=True)
-                            if silence_detected:
+                            if silence_detected: # Check original trigger reason for reset
                                 logger.info("Resetting VAD state due to silence after processing error.")
-                                ring_buffer.clear()
+                                trigger_buffer.clear()
+                                silence_buffer.clear()
                                 triggered = False
                                 current_transcription_batch = []
                         finally:
