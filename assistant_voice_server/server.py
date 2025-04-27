@@ -116,6 +116,38 @@ def filter_authorized_users(transcriptions: List[dict], device: Device) -> List[
     
     return filtered_text
 
+def merge_consecutive_messages(batch: List[AiAgentMessage]) -> List[AiAgentMessage]:
+    """Merges consecutive messages from the same user in a batch."""
+    if not batch:
+        return []
+
+    merged_batch = []
+    # Start with the first message
+    current_merged_message = AiAgentMessage(
+        nickname=batch[0].nickname,
+        message=batch[0].message,
+        location=batch[0].location # Assuming location is consistent for the batch
+    )
+
+    for i in range(1, len(batch)):
+        current_message = batch[i]
+        if current_message.nickname == current_merged_message.nickname:
+            # Same user, append message content
+            current_merged_message.message += " " + current_message.message
+        else:
+            # Different user, finalize the previous message and start a new one
+            merged_batch.append(current_merged_message)
+            current_merged_message = AiAgentMessage(
+                nickname=current_message.nickname,
+                message=current_message.message,
+                location=current_message.location
+            )
+    
+    # Append the last accumulated message
+    merged_batch.append(current_merged_message)
+    
+    return merged_batch
+
 async def handle_client(websocket):
     logger.info(f"Client connected: {websocket.remote_address}")
 
@@ -274,8 +306,11 @@ async def handle_client(websocket):
                                     reset_vad_state = False # Continue listening
 
                             if send_batch_to_ai and current_transcription_batch:
-                                json_data = json.dumps([asdict(message) for message in current_transcription_batch])
-                                logger.info(f"Sending batch to AI agent: {json_data}")
+                                # Merge consecutive messages before sending
+                                merged_batch_to_send = merge_consecutive_messages(current_transcription_batch)
+                                
+                                json_data = json.dumps([asdict(message) for message in merged_batch_to_send])
+                                logger.info(f"Sending merged batch to AI agent: {json_data}")
                                 await ai_agent_socket.send(json_data)
 
                             if reset_vad_state:
